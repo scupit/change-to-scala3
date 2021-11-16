@@ -1,7 +1,7 @@
 {
-  "name": "node-root-project",
+  "name": "gradle-scala3-project-fix",
   "version": "1.0.0",
-  "description": "Base project for use with NodeJS",
+  "description": "Changes default gradle Scala project to use Scala 3",
   "main": "src/index.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",

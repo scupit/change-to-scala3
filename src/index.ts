@@ -1,6 +1,11 @@
 import fs from "fs";
 import path from "path";
 
+interface BuildFileData {
+  filePath: string;
+  isLibrary: boolean;
+}
+
 function validatedVersion(versionString: string): string {
   const versionRegex = /^\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 
@@ -11,14 +16,14 @@ function validatedVersion(versionString: string): string {
 }
 
 function populatePackagePieces(receiverList: string[], gradleBuildFileString: string): void {
-  const indexOfAppLine: number = gradleBuildFileString.search(/".+\.(App|main)"/);
+  const indexOfAppLine: number = gradleBuildFileString.search(/("|').+\.(App|main)("|')/);
 
   if (indexOfAppLine === -1) {
     throw EvalError("In gradle build file's 'application' section, 'mainClass' is an unexpected value.");
   }
 
   let lastQuoteIndex = indexOfAppLine + 1;
-  while (gradleBuildFileString[lastQuoteIndex] !== '"') {
+  while (gradleBuildFileString[lastQuoteIndex] !== '"' && gradleBuildFileString[lastQuoteIndex] !== "'") {
     ++lastQuoteIndex;
   }
 
@@ -38,22 +43,35 @@ function populatePackagePieces(receiverList: string[], gradleBuildFileString: st
 }
 
 function fixedBuildFileString(
-  gradleBuildFilePath: string,
+  gradleBuildFileData: BuildFileData,
   scalaVersion: string,
   packagePieces: string[]
 ): string {
-  const gradleBuildFileString: string = fs.readFileSync(gradleBuildFilePath).toString();
-  populatePackagePieces(packagePieces, gradleBuildFileString);
+  const gradleBuildFileString: string = fs.readFileSync(gradleBuildFileData.filePath).toString();
 
-  return gradleBuildFileString
+  if (!gradleBuildFileData.isLibrary) {
+    populatePackagePieces(packagePieces, gradleBuildFileString);
+  }
+
+  const updatedString = gradleBuildFileString
     .replace(
-      /org\.scala-lang:scala-library.*\"/,
-      `org.scala-lang:scala3-library_3:${scalaVersion}"`
+      /Use Scala .+ /,
+      `Use Scala ${scalaVersion} `
     )
     .replace(
-      /\.App/,
-      ".main"
+      /('|")org\.scala-lang:scala-library.*('|")/,
+      `"org.scala-lang:scala3-library_3:${scalaVersion}"`
     );
+
+    if (gradleBuildFileData.isLibrary) {
+      return updatedString;
+    }
+
+    return updatedString
+      .replace(
+        /\.App/,
+        ".main"
+      );
 }
 
 function writeFixedBuildFile(gradleBuildFilePath: string, newData: string): void {
@@ -88,24 +106,62 @@ function writeModernizedMainFile(mainFilePath: string, newMainFileData: string):
   })
 }
 
+function getBuildFilePath(projectRoot: string): BuildFileData | null {
+  const gradleBuildFileNames = [
+    "build.gradle.kts",
+    "build.gradle"
+  ];
+
+  const exeBuildFile = gradleBuildFileNames
+    .map(fileName => path.resolve(projectRoot, "app", fileName))
+    .find(gradleBuildFile => fs.existsSync(gradleBuildFile));
+
+  if (exeBuildFile) {
+    return {
+      filePath: exeBuildFile,
+      isLibrary: false
+    }
+  }
+
+  const libBuildFile = gradleBuildFileNames
+    .map(fileName => path.resolve(projectRoot, "lib", fileName))
+    .find(gradleBuildFile => fs.existsSync(gradleBuildFile));
+
+  if (libBuildFile) {
+    return {
+      filePath: libBuildFile,
+      isLibrary: true
+    }
+  }
+
+  return null;
+}
+
 function main() {
   const args: string[] = process.argv.slice(2);
 
   if (args.length === 2) {
-    const gradleBuildFilePath: string = args[0];
+    const gradleBuildFileData: BuildFileData | null = getBuildFilePath(args[0]);
+
+    if (gradleBuildFileData === null) {
+      throw EvalError(`Unable to find Gradle build file using project root ${args[0]}`)
+    }
+
     const scalaVersion: string = validatedVersion(args[1]);
     const packagePieces: string[] = [ ];
 
     writeFixedBuildFile(
-      gradleBuildFilePath,
-      fixedBuildFileString(gradleBuildFilePath, scalaVersion, packagePieces)
+      gradleBuildFileData.filePath,
+      fixedBuildFileString(gradleBuildFileData, scalaVersion, packagePieces)
     );
 
-    const mainFilePath: string = makeMainFilePath(gradleBuildFilePath, packagePieces);
-    writeModernizedMainFile(mainFilePath, makeModernizedMainFile(mainFilePath));
+    if (!gradleBuildFileData.isLibrary) {
+      const mainFilePath: string = makeMainFilePath(gradleBuildFileData.filePath, packagePieces);
+      writeModernizedMainFile(mainFilePath, makeModernizedMainFile(mainFilePath));
+    }
   }
   else {
-    console.log("Must specify exactly one input file and the target Scala version (ie 3.1.0) as arguments.")
+    console.warn("Must specify exactly one project root and the target Scala version (ie 3.1.0) as arguments.")
   }
 }
 
